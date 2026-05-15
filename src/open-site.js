@@ -64,7 +64,7 @@ async function sendAvailabilityEmail(sectorName) {
     ].join("\n")
   });
 
-  console.log(`Email de alerta enviado para: ${ALERT_RECIPIENTS.join(", ")}`);
+  console.log(`Disponibilidade encontrada em ${sectorName}.`);
 }
 
 async function clickVisibleLogin(page) {
@@ -115,13 +115,24 @@ async function openLoginPage(page) {
     timeout: 60000
   });
 
-  const loginSelector = await clickVisibleLogin(page);
+  await clickVisibleLogin(page);
+}
 
-  console.log(`Tela de login aberta em ${page.url()}`);
-  console.log(`Seletor usado ${loginSelector}`);
+async function ensureLoginFormVisible(page) {
+  const loginInput = page.locator('input[name="login"]').first();
+  if (await loginInput.isVisible().catch(() => false)) {
+    return;
+  }
+
+  await page.goto(LOGIN_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000
+  });
 }
 
 async function fillLoginInputs(page, email, senha) {
+  await ensureLoginFormVisible(page);
+
   const loginInput = page.locator('input[name="login"]').first();
   const passInput = page.locator('input[name="pass"]').first();
 
@@ -147,19 +158,11 @@ async function fillLoginInputs(page, email, senha) {
 
   const loginRequest = await loginRequestPromise;
   if (loginRequest) {
-    await page.waitForResponse((response) => response.request() === loginRequest, { timeout: 30000 }).catch(() => {
-      console.warn("Resposta da requisicao de entrar nao chegou a tempo.");
-    });
-  } else {
-    console.warn("Nao foi possivel detectar requisicao de entrar a tempo.");
+    await page.waitForResponse((response) => response.request() === loginRequest, { timeout: 30000 }).catch(() => {});
   }
 
-  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {
-    console.warn("A proxima pagina nao concluiu domcontentloaded a tempo.");
-  });
+  await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(2000);
-
-  console.log("Campos login/pass preenchidos e botao Entrar acionado.");
 }
 
 function normalizeText(value) {
@@ -173,12 +176,12 @@ function normalizeText(value) {
 
 async function hasUnavailableText(container) {
   const text = normalizeText(await container.innerText().catch(() => ""));
-  return text.includes("ESGOTADO") || text.includes("INDISPONIVEL");
+  return text.includes("ESGOTADO") || text.includes("INDISPONIVEL") || text.includes("INDISPONIVEL NO MOMENTO");
 }
 
 async function setDesiredQuantity(container) {
   const quantityInput = container
-    .locator('input[type="number"], input[name*="quant"], input[id*="quant"]')
+    .locator('input[type="number"]:not([disabled]), input[name*="quant"]:not([disabled]), input[id*="quant"]:not([disabled])')
     .first();
   if (await quantityInput.count().catch(() => 0)) {
     await quantityInput.fill(String(DESIRED_QUANTITY));
@@ -186,48 +189,150 @@ async function setDesiredQuantity(container) {
   }
 
   const quantitySelect = container
-    .locator('select[name*="quant"], select[id*="quant"], select')
+    .locator('select:not([disabled])[name*="quant"], select:not([disabled])[id*="quant"], select:not([disabled])')
     .first();
   if (await quantitySelect.count().catch(() => 0)) {
-    await quantitySelect.selectOption(String(DESIRED_QUANTITY));
+    const optionExists = await quantitySelect.locator(`option[value="${DESIRED_QUANTITY}"]`).count().catch(() => 0);
+    if (optionExists) {
+      await quantitySelect.selectOption(String(DESIRED_QUANTITY));
+      return true;
+    }
+
+    const textOptionExists = await quantitySelect
+      .locator("option")
+      .filter({ hasText: new RegExp(`^\\s*${DESIRED_QUANTITY}\\s*$`) })
+      .count()
+      .catch(() => 0);
+    if (textOptionExists) {
+      await quantitySelect.selectOption({ label: String(DESIRED_QUANTITY) });
+      return true;
+    }
+
+    return false;
+  }
+
+  const plusButton = container
+    .locator('button:has-text("+"), [aria-label*="mais" i], [title*="mais" i]')
+    .first();
+  if (await plusButton.count().catch(() => 0)) {
+    for (let i = 0; i < DESIRED_QUANTITY; i += 1) {
+      await plusButton.click().catch(() => {});
+    }
     return true;
   }
 
   return false;
 }
 
+async function setDesiredQuantityOnPage(page) {
+  const quantityInput = page
+    .locator('input[type="number"]:not([disabled]), input[name*="quant"]:not([disabled]), input[id*="quant"]:not([disabled])')
+    .first();
+  if (await quantityInput.count().catch(() => 0)) {
+    await quantityInput.fill(String(DESIRED_QUANTITY));
+    return true;
+  }
+
+  const quantitySelect = page
+    .locator('select:not([disabled])[name*="quant"], select:not([disabled])[id*="quant"], select:not([disabled])')
+    .first();
+  if (await quantitySelect.count().catch(() => 0)) {
+    const optionExists = await quantitySelect.locator(`option[value="${DESIRED_QUANTITY}"]`).count().catch(() => 0);
+    if (optionExists) {
+      await quantitySelect.selectOption(String(DESIRED_QUANTITY));
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function sectorMatchInText(haystack, sectorName) {
+  const normalizedText = normalizeText(haystack);
+  const normalizedSector = normalizeText(sectorName);
+  if (normalizedText.includes(normalizedSector)) {
+    return true;
+  }
+
+  const sectorTokens = normalizedSector.split(" ").filter(Boolean);
+  return sectorTokens.every((token) => normalizedText.includes(token));
+}
+
+async function findActionButton(container) {
+  const actionButton = container
+    .locator(
+      'button:has-text("Comprar"), [role="button"]:has-text("Comprar"), input[type="submit"][value*="Comprar"], button:has-text("Adicionar"), [role="button"]:has-text("Adicionar"), button:has-text("Selecionar"), [role="button"]:has-text("Selecionar"), button:has-text("Continuar"), [role="button"]:has-text("Continuar")'
+    )
+    .first();
+
+  if (await actionButton.count().catch(() => 0)) {
+    return actionButton;
+  }
+
+  return null;
+}
+
 async function tryBuyInSector(page, sectorName) {
   const sectorLabel = page.getByText(sectorName, { exact: false }).first();
-  if (!(await sectorLabel.count().catch(() => 0))) {
-    return false;
+  if (await sectorLabel.count().catch(() => 0)) {
+    await sectorLabel.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(500);
+
+    const globalQuantitySet = await setDesiredQuantityOnPage(page);
+    const globalActionButton = await findActionButton(page.locator("body"));
+    if (globalQuantitySet && globalActionButton) {
+      await sendAvailabilityEmail(sectorName).catch((error) => {
+        console.warn(`Falha ao enviar email de alerta: ${error.message}`);
+      });
+      await globalActionButton.click({ timeout: 10000 });
+      return true;
+    }
+
+    const containers = sectorLabel.locator(
+      'xpath=ancestor::*[self::section or self::article or self::div or self::li or self::tr]'
+    );
+    const totalContainers = await containers.count().catch(() => 0);
+
+    for (let index = 0; index < totalContainers; index += 1) {
+      const container = containers.nth(index);
+      const text = await container.innerText().catch(() => "");
+      if (!sectorMatchInText(text, sectorName)) {
+        continue;
+      }
+      if (await hasUnavailableText(container)) {
+        continue;
+      }
+
+      const quantitySet = await setDesiredQuantity(container);
+      const actionButton = await findActionButton(container);
+      if (!quantitySet || !actionButton) {
+        continue;
+      }
+
+      await sendAvailabilityEmail(sectorName).catch((error) => {
+        console.warn(`Falha ao enviar email de alerta: ${error.message}`);
+      });
+      await actionButton.click({ timeout: 10000 });
+      return true;
+    }
   }
 
-  const container = sectorLabel.locator(
-    'xpath=ancestor::*[self::section or self::article or self::div or self::li or self::tr][1]'
+  const actionBlocks = page.locator(
+    'xpath=//*[self::button or self::input][contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ", "abcdefghijklmnopqrstuvwxyzáàâãéèêíìîóòôõúùûç"), "comprar") or contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ", "abcdefghijklmnopqrstuvwxyzáàâãéèêíìîóòôõúùûç"), "adicionar") or contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ", "abcdefghijklmnopqrstuvwxyzáàâãéèêíìîóòôõúùûç"), "selecionar")]'
   );
-
-  if (await hasUnavailableText(container)) {
-    return false;
+  const totalActionBlocks = await actionBlocks.count().catch(() => 0);
+  for (let index = 0; index < totalActionBlocks; index += 1) {
+    const action = actionBlocks.nth(index);
+    const container = action.locator('xpath=ancestor::*[self::section or self::article or self::div or self::li or self::tr][1]');
+    const containerText = await container.innerText().catch(() => "");
+    if (!sectorMatchInText(containerText, sectorName)) {
+      continue;
+    }
+    if (await hasUnavailableText(container)) {
+      return false;
+    }
   }
-
-  const quantitySet = await setDesiredQuantity(container);
-  if (!quantitySet) {
-    return false;
-  }
-
-  const buyButton = container
-    .locator('button:has-text("Comprar"), [role="button"]:has-text("Comprar"), input[type="submit"][value*="Comprar"]')
-    .first();
-  if (!(await buyButton.count().catch(() => 0))) {
-    return false;
-  }
-
-  await sendAvailabilityEmail(sectorName).catch((error) => {
-    console.warn(`Falha ao enviar email de alerta: ${error.message}`);
-  });
-  await buyButton.click({ timeout: 10000 });
-  console.log(`Compra acionada no setor ${sectorName} com quantidade ${DESIRED_QUANTITY}.`);
-  return true;
+  return false;
 }
 
 async function reloginWithFirstAccount(page) {
@@ -241,15 +346,11 @@ async function reloginWithFirstAccount(page) {
     waitUntil: "domcontentloaded",
     timeout: 30000
   });
-  console.log("Relogin com a conta concluido e retorno para pagina base.");
 }
 
 async function monitorSectors(page) {
-  console.log(`Iniciando monitoramento em ${SECTOR_URL}.`);
-
   while (true) {
     if (page.url() !== "about:blank" && !page.url().includes("/buy/sector")) {
-      console.warn(`Redirecionado para ${page.url()}. Reautenticando.`);
       await reloginWithFirstAccount(page);
     }
 
@@ -265,15 +366,13 @@ async function monitorSectors(page) {
       }
     }
 
-    console.log(
-      `Sem disponibilidade em ${TARGET_SECTORS.join(" / ")}. Nova verificacao em ${POLL_INTERVAL_MS / 1000}s.`
-    );
+    console.log("Sem disponibilidade.");
     await page.waitForTimeout(POLL_INTERVAL_MS);
   }
 }
 
 async function waitForUserActionAfterPurchase() {
-  console.log("Compra acionada. Aguardando acao do usuario (pressione Enter para encerrar).");
+  console.log("Disponibilidade encontrada. Aguardando acao do usuario.");
   await new Promise((resolve) => {
     process.stdin.resume();
     process.stdin.once("data", () => resolve());
@@ -301,7 +400,6 @@ async function main() {
       viewport: { width: 1440, height: 900 }
     });
 
-    console.log(`Conta usada: ${FIRST_ACCOUNT.email}`);
     await openLoginPage(page);
     await fillLoginInputs(page, FIRST_ACCOUNT.email, FIRST_ACCOUNT.senha);
     const purchased = await monitorSectors(page);
@@ -309,8 +407,6 @@ async function main() {
     if (purchased) {
       await waitForUserActionAfterPurchase();
     }
-
-    console.log("Fluxo concluido.");
   } finally {
     if (page && !page.isClosed()) {
       await page.close();
