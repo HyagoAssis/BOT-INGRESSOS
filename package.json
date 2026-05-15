@@ -1,0 +1,16 @@
+{
+  "name": "bot-teste",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fluxo seguro com Playwright para abrir o site de ingressos do Flamengo sem realizar login.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/open-site.js",
+    "start:headed": "node src/open-site.js --headed"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "nodemailer": "^8.0.7",
+    "playwright": "^1.54.2"
+  }
+}
