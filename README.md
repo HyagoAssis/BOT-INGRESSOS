@@ -50,6 +50,9 @@ ACCOUNT_PASSWORD=sua_senha_no_site
 
 ALERT_EMAILS=voce@gmail.com,outra@gmail.com
 
+BUY_URL=https://ingressos.flamengo.com.br/buy/sector?event=35755
+TARGET_SECTORS=SUL NÍVEL 1,SUL NÍVEL 2
+
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=seu_gmail@gmail.com
@@ -76,9 +79,9 @@ npm run start:headed
 
 ## 5) Comportamento do bot
 
-- Monitora: `https://ingressos.flamengo.com.br/buy/sector?event=35755`
+- Monitora a URL definida em `BUY_URL`
 - Atualiza a cada 3 segundos
-- Busca disponibilidade em `SUL NÍVEL 1` e `SUL NÍVEL 2`
+- Busca disponibilidade nos setores definidos em `TARGET_SECTORS` (separados por vírgula)
 - Ao encontrar:
   - envia e-mail de alerta
   - preenche quantidade `3`

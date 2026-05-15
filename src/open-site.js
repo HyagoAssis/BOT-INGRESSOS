@@ -4,8 +4,11 @@ import nodemailer from "nodemailer";
 import { conta, emails } from "./accounts.js";
 
 const LOGIN_URL = "https://ingressos.flamengo.com.br/login";
-const SECTOR_URL = "https://ingressos.flamengo.com.br/buy/sector?event=35755";
-const TARGET_SECTORS = ["SUL NÍVEL 1", "SUL NÍVEL 2"];
+const SECTOR_URL = (process.env.BUY_URL || "").trim();
+const TARGET_SECTORS = (process.env.TARGET_SECTORS || "")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
 const POLL_INTERVAL_MS = 3000;
 const DESIRED_QUANTITY = 3;
 const headless = !process.argv.includes("--headed");
@@ -106,7 +109,7 @@ async function clickVisibleLogin(page) {
   return "page.goto(LOGIN_URL)";
 }
 
-async function openLoginPage(page, attempt) {
+async function openLoginPage(page) {
   await page.goto(SECTOR_URL, {
     waitUntil: "domcontentloaded",
     timeout: 60000
@@ -114,11 +117,11 @@ async function openLoginPage(page, attempt) {
 
   const loginSelector = await clickVisibleLogin(page);
 
-  console.log(`Tentativa ${attempt}: tela de login aberta em ${page.url()}`);
-  console.log(`Tentativa ${attempt}: seletor usado ${loginSelector}`);
+  console.log(`Tela de login aberta em ${page.url()}`);
+  console.log(`Seletor usado ${loginSelector}`);
 }
 
-async function fillLoginInputs(page, attempt, email, senha) {
+async function fillLoginInputs(page, email, senha) {
   const loginInput = page.locator('input[name="login"]').first();
   const passInput = page.locator('input[name="pass"]').first();
 
@@ -145,18 +148,18 @@ async function fillLoginInputs(page, attempt, email, senha) {
   const loginRequest = await loginRequestPromise;
   if (loginRequest) {
     await page.waitForResponse((response) => response.request() === loginRequest, { timeout: 30000 }).catch(() => {
-      console.warn(`Tentativa ${attempt}: resposta da requisicao de entrar nao chegou a tempo.`);
+      console.warn("Resposta da requisicao de entrar nao chegou a tempo.");
     });
   } else {
-    console.warn(`Tentativa ${attempt}: nao foi possivel detectar requisicao de entrar a tempo.`);
+    console.warn("Nao foi possivel detectar requisicao de entrar a tempo.");
   }
 
   await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {
-    console.warn(`Tentativa ${attempt}: a proxima pagina nao concluiu domcontentloaded a tempo.`);
+    console.warn("A proxima pagina nao concluiu domcontentloaded a tempo.");
   });
   await page.waitForTimeout(2000);
 
-  console.log(`Tentativa ${attempt}: campos login/pass preenchidos e botao Entrar acionado.`);
+  console.log("Campos login/pass preenchidos e botao Entrar acionado.");
 }
 
 function normalizeText(value) {
@@ -227,27 +230,27 @@ async function tryBuyInSector(page, sectorName) {
   return true;
 }
 
-async function reloginWithFirstAccount(page, attempt) {
+async function reloginWithFirstAccount(page) {
   if (!FIRST_ACCOUNT) {
     throw new Error("Nenhuma conta disponivel em accounts.js/.env.");
   }
 
-  await openLoginPage(page, attempt);
-  await fillLoginInputs(page, attempt, FIRST_ACCOUNT.email, FIRST_ACCOUNT.senha);
+  await openLoginPage(page);
+  await fillLoginInputs(page, FIRST_ACCOUNT.email, FIRST_ACCOUNT.senha);
   await page.goto(SECTOR_URL, {
     waitUntil: "domcontentloaded",
     timeout: 30000
   });
-  console.log(`Tentativa ${attempt}: relogin com a primeira conta concluido e retorno para pagina base.`);
+  console.log("Relogin com a conta concluido e retorno para pagina base.");
 }
 
-async function monitorSectors(page, attempt) {
-  console.log(`Tentativa ${attempt}: iniciando monitoramento em ${SECTOR_URL}.`);
+async function monitorSectors(page) {
+  console.log(`Iniciando monitoramento em ${SECTOR_URL}.`);
 
   while (true) {
     if (page.url() !== "about:blank" && !page.url().includes("/buy/sector")) {
-      console.warn(`Tentativa ${attempt}: redirecionado para ${page.url()}. Reautenticando.`);
-      await reloginWithFirstAccount(page, attempt);
+      console.warn(`Redirecionado para ${page.url()}. Reautenticando.`);
+      await reloginWithFirstAccount(page);
     }
 
     await page.goto(SECTOR_URL, {
@@ -263,7 +266,7 @@ async function monitorSectors(page, attempt) {
     }
 
     console.log(
-      `Tentativa ${attempt}: sem disponibilidade em ${TARGET_SECTORS.join(" / ")}. Nova verificacao em ${POLL_INTERVAL_MS / 1000}s.`
+      `Sem disponibilidade em ${TARGET_SECTORS.join(" / ")}. Nova verificacao em ${POLL_INTERVAL_MS / 1000}s.`
     );
     await page.waitForTimeout(POLL_INTERVAL_MS);
   }
@@ -282,6 +285,14 @@ async function main() {
   let page;
 
   try {
+    if (!SECTOR_URL) {
+      console.error("Configuracao ausente: defina BUY_URL no .env.");
+      return;
+    }
+    if (!TARGET_SECTORS.length) {
+      console.error("Configuracao ausente: defina TARGET_SECTORS no .env (separados por virgula).");
+      return;
+    }
     if (!FIRST_ACCOUNT) {
       throw new Error("Nenhuma conta encontrada em accounts.js/.env.");
     }
@@ -290,11 +301,10 @@ async function main() {
       viewport: { width: 1440, height: 900 }
     });
 
-    const attempt = 1;
-    console.log(`Tentativa ${attempt}: primeira conta ${FIRST_ACCOUNT.email}`);
-    await openLoginPage(page, attempt);
-    await fillLoginInputs(page, attempt, FIRST_ACCOUNT.email, FIRST_ACCOUNT.senha);
-    const purchased = await monitorSectors(page, attempt);
+    console.log(`Conta usada: ${FIRST_ACCOUNT.email}`);
+    await openLoginPage(page);
+    await fillLoginInputs(page, FIRST_ACCOUNT.email, FIRST_ACCOUNT.senha);
+    const purchased = await monitorSectors(page);
 
     if (purchased) {
       await waitForUserActionAfterPurchase();
