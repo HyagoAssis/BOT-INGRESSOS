@@ -1,14 +1,37 @@
 import { chromium } from "playwright";
+import readline from "node:readline/promises";
 import { FIRST_ACCOUNT, SECTOR_URL, TARGET_SECTORS, headless } from "./config.js";
 import { openLoginPage, fillLoginInputs } from "./auth.js";
 import { monitorSectors } from "./monitor.js";
 
 async function waitForUserActionAfterPurchase() {
-  console.log("Disponibilidade encontrada. Aguardando acao do usuario.");
-  await new Promise((resolve) => {
-    process.stdin.resume();
-    process.stdin.once("data", () => resolve());
+  console.log("Disponibilidade encontrada.");
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
   });
+  const timeoutMs = 2 * 60 * 1000;
+
+  const askWithTimeout = async () => {
+    return Promise.race([
+      rl.question("Aperta y para continuar\n").then((value) => value.trim().toLowerCase()),
+      new Promise((resolve) => {
+        setTimeout(() => resolve("__timeout__"), timeoutMs);
+      })
+    ]);
+  };
+
+  while (true) {
+    const input = await askWithTimeout();
+    if (input === "__timeout__") {
+      console.log("Sem acao do usuario por 2 minutos. Continuando automaticamente.");
+      break;
+    }
+    if (input === "y") {
+      break;
+    }
+  }
+  rl.close();
 }
 
 async function main() {
@@ -30,9 +53,12 @@ async function main() {
   try {
     await openLoginPage(page);
     await fillLoginInputs(page, FIRST_ACCOUNT.email, FIRST_ACCOUNT.senha);
-    const purchased = await monitorSectors(page);
-    if (purchased) {
-      await waitForUserActionAfterPurchase();
+
+    while (true) {
+      const purchased = await monitorSectors(page);
+      if (purchased) {
+        await waitForUserActionAfterPurchase();
+      }
     }
   } finally {
     if (!page.isClosed()) {
